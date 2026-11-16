@@ -24,6 +24,7 @@ import sg.edumate.app.data.live.SimulatedLiveSessionGateway
 import sg.edumate.app.data.live.WebSocketLiveSessionGateway
 import sg.edumate.app.data.local.*
 import sg.edumate.app.data.remote.AuthInterceptor
+import sg.edumate.app.data.remote.ConsentAwareLlmProvider
 import sg.edumate.app.data.remote.EduMateApi
 import sg.edumate.app.data.remote.FallbackLlmProvider
 import sg.edumate.app.data.remote.RemoteLlmProvider
@@ -76,7 +77,9 @@ object DatabaseModule {
 object NetworkModule {
     @Provides @Singleton
     fun okHttp(auth: AuthInterceptor): OkHttpClient = OkHttpClient.Builder()
-        .connectionSpecs(listOf(ConnectionSpec.RESTRICTED_TLS)) // TLS 1.2+ with modern ciphers only
+        // TLS 1.2+ with modern ciphers only. Debug builds may also use plain HTTP, but only to the developer's
+        // own PC (see src/debug/res/xml/network_security_config.xml).
+        .connectionSpecs(if (BuildConfig.DEBUG) listOf(ConnectionSpec.RESTRICTED_TLS, ConnectionSpec.CLEARTEXT) else listOf(ConnectionSpec.RESTRICTED_TLS))
         .certificatePinner(
             CertificatePinner.Builder()
                 // Replace with the backend's SPKI pins (primary + backup) before release.
@@ -85,7 +88,7 @@ object NetworkModule {
         )
         .addInterceptor(auth)
         .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS) // generation can take a while
+        .readTimeout(180, TimeUnit.SECONDS) // a full worksheet can take 1-2 minutes to generate
         .pingInterval(20, TimeUnit.SECONDS) // keeps live-session WebSockets warm
         .build()
 
@@ -101,9 +104,13 @@ object NetworkModule {
 @InstallIn(SingletonComponent::class)
 object AiModule {
     @Provides @Singleton
-    fun llm(api: EduMateApi): LlmProvider =
-        if (BuildConfig.USE_MOCK_BACKEND) OfflineTemplateProvider()
-        else FallbackLlmProvider(RemoteLlmProvider(api), OfflineTemplateProvider())
+    fun llm(api: EduMateApi, prefs: UserPreferencesRepository): LlmProvider =
+        if (BuildConfig.USE_MOCK_AI) OfflineTemplateProvider()
+        else ConsentAwareLlmProvider(
+            online = FallbackLlmProvider(RemoteLlmProvider(api), OfflineTemplateProvider()),
+            offline = OfflineTemplateProvider(),
+            prefs = prefs,
+        )
 
     @Provides @Singleton
     fun gateway(provider: LlmProvider, moderator: ContentModerator, audit: AuditLogRepository, classes: ClassRepository,
@@ -112,7 +119,7 @@ object AiModule {
 
     @Provides @Singleton
     fun live(api: EduMateApi, client: OkHttpClient, json: Json, clock: Clock): LiveSessionGateway =
-        if (BuildConfig.USE_MOCK_BACKEND) SimulatedLiveSessionGateway(clock)
+        if (BuildConfig.USE_MOCK_LIVE) SimulatedLiveSessionGateway(clock)
         else WebSocketLiveSessionGateway(api, client, json, BuildConfig.LIVE_WS_URL)
 }
 

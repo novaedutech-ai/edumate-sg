@@ -1,6 +1,10 @@
 package sg.edumate.app.data.remote
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.coroutines.flow.first
+import retrofit2.HttpException
+import sg.edumate.app.data.settings.UserPreferencesRepository
 import retrofit2.http.Body
 import retrofit2.http.POST
 import retrofit2.http.PUT
@@ -24,12 +28,57 @@ interface EduMateApi {
 @Serializable data class CreateSessionRequest(val activityTitle: String, val classId: String?, val maxParticipants: Int = 45)
 @Serializable data class CreateSessionResponse(val sessionId: String, val joinCode: String, val wsTicket: String, val expiresAtEpochMs: Long)
 
-/** Calls the EduMate backend; the backend owns model selection, prompts and vendor keys. */
+@Serializable private data class ApiErrorBody(val code: String = "", val message: String = "")
+
+/**
+ * Calls the EduMate backend; the backend owns model selection, prompts and vendor keys.
+ * HTTP errors become [AiProviderException]s carrying the backend's teacher-readable message.
+ */
 class RemoteLlmProvider(private val api: EduMateApi) : LlmProvider {
     override val id = "edumate-backend-v1"
-    override suspend fun lessonPlan(request: LessonPlanRequest) = api.generateLessonPlan(request)
-    override suspend fun worksheet(request: WorksheetRequest) = api.generateWorksheet(request)
-    override suspend fun feedback(request: FeedbackRequest) = api.suggestFeedback(request)
+    override suspend fun lessonPlan(request: LessonPlanRequest) = call { api.generateLessonPlan(request) }
+    override suspend fun worksheet(request: WorksheetRequest) = call { api.generateWorksheet(request) }
+    override suspend fun feedback(request: FeedbackRequest) = call { api.suggestFeedback(request) }
+
+    private suspend fun <T> call(block: suspend () -> T): T = try {
+        block()
+    } catch (e: HttpException) {
+        val message = runCatching {
+            e.response()?.errorBody()?.string()?.let { errorJson.decodeFromString(ApiErrorBody.serializer(), it).message }
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+        throw AiProviderException(
+            userMessage = message ?: "The AI service returned an error (${e.code()}). Please try again.",
+            blocked = e.code() == 422 || e.code() == 451,
+            cause = e,
+        )
+    }
+
+    private companion object { val errorJson = Json { ignoreUnknownKeys = true } }
+}
+
+/**
+ * Enforces the teacher's AI consent and the school's AI setting on every request: if either is off,
+ * nothing is sent to the AI service and the on-device templates are used instead.
+ */
+class ConsentAwareLlmProvider(
+    private val online: LlmProvider,
+    private val offline: LlmProvider,
+    private val prefs: UserPreferencesRepository,
+) : LlmProvider {
+    @Volatile private var lastUsed: String = online.id
+    override val id: String get() = lastUsed
+
+    private suspend fun pick(): LlmProvider =
+        if (prefs.prefs.first().aiConsent && prefs.current().aiFeaturesEnabled) online else offline
+
+    private suspend fun <T> run(block: suspend (LlmProvider) -> T): T {
+        val provider = pick()
+        return block(provider).also { lastUsed = provider.id }
+    }
+
+    override suspend fun lessonPlan(request: LessonPlanRequest) = run { it.lessonPlan(request) }
+    override suspend fun worksheet(request: WorksheetRequest) = run { it.worksheet(request) }
+    override suspend fun feedback(request: FeedbackRequest) = run { it.feedback(request) }
 }
 
 /**

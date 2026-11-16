@@ -96,6 +96,13 @@ class SafeAiGateway(
             )))
         } catch (e: CancellationException) {
             throw e
+        } catch (e: AiProviderException) {
+            if (e.blocked) {
+                log(AuditAction.AI_RESPONSE_BLOCKED, "$kind: rejected by AI service", requestId)
+                Outcome.Blocked(e.userMessage)
+            } else {
+                Outcome.Failed(e.userMessage, e)
+            }
         } catch (e: Exception) {
             Outcome.Failed("Couldn't generate right now. Your inputs are saved; try again when online.", e)
         }

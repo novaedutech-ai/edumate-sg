@@ -81,3 +81,10 @@ data class FeedbackRequest(
 
 @Serializable
 data class FeedbackDraft(val feedback: String, val suggestedMarks: Int?, val misconceptionTag: String?)
+
+/**
+ * Thrown by a provider when the AI service answered but could not produce content.
+ * [userMessage] is shown to the teacher as-is; [blocked] marks safety/PII refusals.
+ */
+class AiProviderException(val userMessage: String, val blocked: Boolean = false, cause: Throwable? = null) :
+    Exception(userMessage, cause)

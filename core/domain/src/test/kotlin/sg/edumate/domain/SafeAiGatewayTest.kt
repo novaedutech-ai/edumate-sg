@@ -66,4 +66,14 @@ class SafeAiGatewayTest {
         }
         assertIs<Outcome.Failed>(gateway(boom).lessonPlan { req(it) })
     }
+
+    @Test fun `provider errors carry their message and blocked flag`() = runTest {
+        fun failing(ex: Exception) = object : LlmProvider by OfflineTemplateProvider() {
+            override suspend fun lessonPlan(request: LessonPlanRequest): LessonPlanDraft = throw ex
+        }
+        val blocked = gateway(failing(AiProviderException("Remove the NRIC", blocked = true))).lessonPlan { req(it) }
+        assertEquals("Remove the NRIC", (blocked as Outcome.Blocked).reason)
+        val failed = gateway(failing(AiProviderException("Service busy"))).lessonPlan { req(it) }
+        assertEquals("Service busy", (failed as Outcome.Failed).message)
+    }
 }

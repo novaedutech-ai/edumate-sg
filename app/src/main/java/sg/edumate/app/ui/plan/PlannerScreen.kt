@@ -105,6 +105,9 @@ private fun QuickGenerateCard(state: PlannerUiState, vm: PlannerViewModel) {
                 if (state.generating) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                 else { Icon(Icons.Outlined.AutoAwesome, null); Spacer(Modifier.width(8.dp)); Text("3 · Generate lesson plan") }
             }
+            if (state.generating) Text("Generating with AI. This usually takes 30 seconds to 2 minutes.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp))
         }
     }
 }

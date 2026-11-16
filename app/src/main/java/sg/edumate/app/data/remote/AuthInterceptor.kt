@@ -2,6 +2,7 @@ package sg.edumate.app.data.remote
 
 import okhttp3.Interceptor
 import okhttp3.Response
+import sg.edumate.app.BuildConfig
 import sg.edumate.app.security.SecretStore
 import javax.inject.Inject
 
@@ -9,6 +10,7 @@ import javax.inject.Inject
 class AuthInterceptor @Inject constructor(private val secrets: SecretStore) : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         val token = runCatching { secrets.get(SecretStore.ACCESS_TOKEN)?.decodeToString() }.getOrNull()
+            ?: BuildConfig.DEV_TOKEN.takeIf { it.isNotEmpty() } // local dev backend only
         val req = chain.request().newBuilder()
             .header("X-Client", "edumate-android")
             .apply { if (token != null) header("Authorization", "Bearer $token") }

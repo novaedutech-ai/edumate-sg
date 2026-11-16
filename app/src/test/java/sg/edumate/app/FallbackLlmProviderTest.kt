@@ -14,6 +14,7 @@ import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import sg.edumate.app.data.remote.EduMateApi
 import sg.edumate.app.data.remote.FallbackLlmProvider
 import sg.edumate.app.data.remote.RemoteLlmProvider
+import sg.edumate.domain.ai.AiProviderException
 import sg.edumate.domain.ai.LessonPlanRequest
 import sg.edumate.domain.ai.OfflineTemplateProvider
 import sg.edumate.domain.model.Stream
@@ -46,5 +47,16 @@ class FallbackLlmProviderTest {
         val out = p.lessonPlan(req)
         assertEquals(OfflineTemplateProvider.ID, p.id)
         assertTrue(out.title.contains("Algebraic expressions"))
+    }
+
+    @Test fun backendErrorsBecomeReadableMessages() = runTest {
+        val server = MockWebServer().apply { start() }
+        server.enqueue(MockResponse().setResponseCode(422).setBody("""{"code":"pii_detected","message":"Remove the NRIC"}"""))
+        val p = FallbackLlmProvider(RemoteLlmProvider(api(server)), OfflineTemplateProvider())
+        val e = runCatching { p.lessonPlan(req) }.exceptionOrNull()
+        assertTrue(e is AiProviderException)
+        assertEquals("Remove the NRIC", (e as AiProviderException).userMessage)
+        assertTrue(e.blocked)
+        server.shutdown()
     }
 }

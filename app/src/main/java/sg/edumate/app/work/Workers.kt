@@ -27,7 +27,7 @@ class SyncWorker @AssistedInject constructor(
     private val plans: RoomLessonPlanRepository, private val api: EduMateApi,
 ) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
-        if (BuildConfig.USE_MOCK_BACKEND) return Result.success()
+        if (BuildConfig.DEBUG) return Result.success() // the local dev backend has no sync endpoint
         return try {
             plans.pendingUpload().forEach { p -> api.putLessonPlan(p.id, p); plans.upsert(p.copy(syncState = SyncState.SYNCED)) }
             Result.success()

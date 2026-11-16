@@ -11,11 +11,14 @@ AI teaching assistant for Singapore educators: syllabus-aligned lesson planning,
 | 5 · Backend API spec (OpenAPI 3.1) | [`docs/05-api/openapi.yaml`](docs/05-api/openapi.yaml) |
 | 6 · Privacy & security checklist (PDPA) | [`docs/06-privacy-security-checklist.md`](docs/06-privacy-security-checklist.md) · [DPR template](docs/templates/data-processing-record.md) |
 | 7 · Phased roadmap | [`docs/07-roadmap.md`](docs/07-roadmap.md) |
+| Running the AI backend on your PC | [`docs/08-local-backend-setup.md`](docs/08-local-backend-setup.md) |
 
 ## Project layout
 ```
 core/domain/   Pure Kotlin. Models, repository interfaces, use cases, SafeAiGateway, PiiTokeniser,
                moderation, worksheet quality checks, live-session reducer, grouping, analytics. 31 tests.
+backend/       Kotlin/Ktor AI backend: holds the Claude API key, calls Claude with structured outputs,
+               re-checks PII, moderates output, filters citations. 10 tests.
 app/           Android app (Compose, Material 3, Hilt, Room+SQLCipher, Retrofit, WorkManager, DataStore).
   data/        Repositories, MOE-mock / upload / OER adapters, Keystore, remote API, live transports, PDF export
   ui/          Today · Plan (planner, lesson editor, worksheet generator) · Library · Live · Classes · Privacy · Onboarding
@@ -32,7 +35,7 @@ Requires Android Studio (Ladybug or newer) / Android SDK 35, JDK 17+.
 ./gradlew :app:testDebugUnitTest :app:lintDebug
 ./gradlew :app:connectedDebugAndroidTest
 ```
-Debug builds set `USE_MOCK_BACKEND=true`: AI generation uses `OfflineTemplateProvider` (structured skeletons from syllabus outcomes, clearly labelled) and Live uses `SimulatedLiveSessionGateway` (32 simulated students, some struggling). Release builds call the backend in the OpenAPI spec and fall back to templates offline.
+**Real AI generation** needs the backend running on your PC: see [`docs/08-local-backend-setup.md`](docs/08-local-backend-setup.md) (`.\gradlew :backend:run` with your Claude API key in `backend/secrets.properties`). Debug builds call it at `http://10.0.2.2:8080/` (the emulator's address for your PC). If it isn't running, or the teacher has AI turned off, the app uses `OfflineTemplateProvider` (structured skeletons, clearly labelled). Live sessions use `SimulatedLiveSessionGateway` (32 simulated students) until the live service exists.
 
 ## What's mocked or placeholder (by design)
 - **Syllabus codes** (`P4-MA-FR`, `S1-MA-AE`, …) are internal placeholders flagged `isPlaceholderCode`; replace with the official syllabus feed.
@@ -49,5 +52,6 @@ Debug builds set `USE_MOCK_BACKEND=true`: AI generation uses `OfflineTemplatePro
 - Retention purge worker, data export and delete-all, DPO contact, versioned privacy notice with consent.
 
 ## Verification status
-- `:core:domain`: **compiled and all 31 tests pass** (PII tokenisation, gateway safety/citation rules, use cases, coordinated worksheets, roster import, live reducer, grouping, interventions, analytics, privacy-annotation coverage).
+- `:backend`: **compiled and all 10 tests pass** against a fake model (schema generation, PII rejection, moderation, citation filtering, worksheet coordination, HTTP endpoints, dev token). Not yet tested against the live Claude API from the authoring environment (no key there).
+- `:core:domain`: **compiled and all 32 tests pass** (PII tokenisation, gateway safety/citation rules, use cases, coordinated worksheets, roster import, live reducer, grouping, interventions, analytics, privacy-annotation coverage).
 - `:app`: written against AGP 8.7 / Compose BOM 2024.12 but **not yet built with the Android toolchain**. The authoring environment had no Android SDK or Google Maven access. All app sources were type-checked with the Kotlin 2.0.21 compiler (serialization and Compose plugins on) against desktop Compose/Material 3 jars, `android-all`, and stubs for the Google-only libraries. That pass found and fixed one bug. Screens, ViewModels, data layer and unit tests type-check cleanly. Not yet checked: the DataStore, WorkManager, Biometric and Activity wiring, KSP (Room/Hilt) code generation, and resource linking. Run `./gradlew :app:assembleDebug` first and expect minor fixes.

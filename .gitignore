@@ -9,3 +9,6 @@ captures/
 app/google-services.json
 *.keystore
 *.jks
+
+# Backend secrets (never commit)
+backend/secrets.properties

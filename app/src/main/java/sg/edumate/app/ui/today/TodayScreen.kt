@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Grading
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -106,7 +107,7 @@ fun TodayScreen(
                             LinearProgressIndicator(progress = { a.submitted.toFloat() / a.total.coerceAtLeast(1) }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
                         }
                     },
-                    leadingContent = { Icon(Icons.Outlined.Grading, null) },
+                    leadingContent = { Icon(Icons.AutoMirrored.Outlined.Grading, null) },
                 )
             }
             if (s.drafts.isNotEmpty()) {

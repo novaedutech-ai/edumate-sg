@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -8,6 +9,15 @@ plugins {
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
 }
+
+// Developer settings: put overrides in local.properties (not committed), e.g.
+//   edumate.apiBaseUrl=http://127.0.0.1:8080/   (real phone over USB with `adb reverse`)
+//   edumate.useMockAi=true                     (skip the backend; offline templates only)
+val localProps = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+fun devSetting(name: String, default: String): String =
+    (project.findProperty(name) as String?) ?: localProps.getProperty(name) ?: default
 
 android {
     namespace = "sg.edumate.app"
@@ -22,19 +32,28 @@ android {
         testInstrumentationRunner = "sg.edumate.app.HiltTestRunner"
         vectorDrawables { useSupportLibrary = true }
 
-        // Backend base URL. Hosted in asia-southeast1 (Singapore). No API keys ship in the app.
-        buildConfigField("String", "API_BASE_URL", "\"https://api.edumate.example.sg/\"")
+        // No API keys ship in the app: AI calls go through the EduMate backend.
         buildConfigField("String", "LIVE_WS_URL", "\"wss://live.edumate.example.sg/v1/sessions\"")
-        // Dev builds use the on-device template provider + simulated live session.
-        buildConfigField("boolean", "USE_MOCK_BACKEND", "true")
     }
 
     buildTypes {
+        debug {
+            // Default: the backend running on your PC, reached from the emulator via 10.0.2.2.
+            // If it isn't running, the app falls back to offline templates.
+            buildConfigField("String", "API_BASE_URL", "\"${devSetting("edumate.apiBaseUrl", "http://10.0.2.2:8080/")}\"")
+            buildConfigField("boolean", "USE_MOCK_AI", devSetting("edumate.useMockAi", "false"))
+            buildConfigField("boolean", "USE_MOCK_LIVE", "true") // live sessions stay simulated until the live service exists
+            buildConfigField("String", "DEV_TOKEN", "\"${devSetting("edumate.devToken", "")}\"")
+        }
         release {
+            // Production backend, hosted in asia-southeast1 (Singapore).
+            buildConfigField("String", "API_BASE_URL", "\"https://api.edumate.example.sg/\"")
+            buildConfigField("boolean", "USE_MOCK_AI", "false")
+            buildConfigField("boolean", "USE_MOCK_LIVE", "false")
+            buildConfigField("String", "DEV_TOKEN", "\"\"")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            buildConfigField("boolean", "USE_MOCK_BACKEND", "false")
         }
     }
     compileOptions {

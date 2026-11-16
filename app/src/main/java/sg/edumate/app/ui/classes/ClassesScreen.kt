@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Assignment
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -165,7 +166,7 @@ fun ClassesScreen(vm: ClassesViewModel = hiltViewModel()) {
                                         a.rubric?.let { r -> Text("Rubric: ${r.criteria.joinToString(" · ")}", style = MaterialTheme.typography.bodySmall) }
                                     }
                                 },
-                                leadingContent = { Icon(Icons.Outlined.Assignment, null) },
+                                leadingContent = { Icon(Icons.AutoMirrored.Outlined.Assignment, null) },
                             )
                         }
                     }
