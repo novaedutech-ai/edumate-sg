@@ -1,0 +1,712 @@
+openapi: 3.1.0
+info:
+  title: EduMate SG API
+  version: 1.0.0
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+  description: |
+    Backend for the EduMate SG teacher app and student join client. Hosted in GCP asia-southeast1.
+
+    **Privacy contract**
+    - Clients MUST tokenise identifiable data before calling `/v1/ai/*` (placeholders like `[PERSON_1]`).
+      The server re-scans every AI request and rejects (422 `pii_detected`) any request still containing
+      NRIC/FIN, email or phone patterns.
+    - AI responses are always drafts. The server never delivers AI content to students unless the
+      owning resource has `reviewStatus = APPROVED`.
+    - Every response carries `X-Request-Id`; audit logs store IDs and counts, never content.
+    - All endpoints are tenant-scoped by the `school_id` claim in the access token (row-level security).
+servers:
+  - url: https://api.edumate.example.sg
+    description: Production (asia-southeast1)
+security:
+  - oidc: []
+x-moe-integration: |
+  The MOE resource adapter is designed for an official MOE API with school SSO, subject to MOE approval.
+  No scraping of MOE or third-party sites is permitted. Until then, `/v1/resources/search` returns
+  user uploads and curated open-licensed content only.
+
+tags:
+  - name: ai
+  - name: content
+  - name: resources
+  - name: sessions
+  - name: classes
+  - name: privacy
+
+paths:
+  /v1/ai/lesson-plans:
+    post:
+      operationId: generateLessonPlan
+      tags: [ai]
+      summary: Generate or refine a lesson plan draft
+      x-rbac: [TEACHER, HOD]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LessonPlanRequest' }
+      responses:
+        '200':
+          description: Draft generated (moderated; citations limited to supplied references)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LessonPlanDraft' }
+        '422': { $ref: '#/components/responses/PiiDetected' }
+        '451': { $ref: '#/components/responses/ContentBlocked' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /v1/ai/worksheets:
+    post:
+      operationId: generateWorksheet
+      tags: [ai]
+      summary: Generate coordinated worksheet versions (one per stream)
+      x-rbac: [TEACHER, HOD]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorksheetRequest' }
+      responses:
+        '200':
+          description: Worksheet draft with answer key, marking scheme and misconceptions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorksheetDraft' }
+        '422': { $ref: '#/components/responses/PiiDetected' }
+        '451': { $ref: '#/components/responses/ContentBlocked' }
+
+  /v1/ai/feedback:
+    post:
+      operationId: suggestFeedback
+      tags: [ai]
+      summary: Suggest feedback on a (tokenised) open response for teacher approval
+      x-rbac: [TEACHER, HOD]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FeedbackRequest' }
+      responses:
+        '200':
+          description: Suggested feedback; must be approved, edited or rejected by the teacher before release
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FeedbackDraft' }
+        '422': { $ref: '#/components/responses/PiiDetected' }
+
+  /v1/lesson-plans/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    put:
+      operationId: putLessonPlan
+      tags: [content]
+      summary: Upsert a lesson plan (offline sync). Optimistic concurrency on `version`.
+      x-rbac: [TEACHER, HOD]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LessonPlan' }
+      responses:
+        '204': { description: Saved }
+        '409': { description: Version conflict; body contains the server copy, content: { application/json: { schema: { $ref: '#/components/schemas/LessonPlan' } } } }
+    get:
+      operationId: getLessonPlan
+      tags: [content]
+      summary: Fetch a plan (owner or same-department if shared)
+      x-rbac: [TEACHER, HOD, SCHOOL_ADMIN]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/LessonPlan' } } } }
+        '404': { description: Not found or not visible to caller }
+
+  /v1/department/lesson-plans:
+    get:
+      operationId: listDepartmentPlans
+      tags: [content]
+      summary: Plans shared with the caller's department(s)
+      parameters:
+        - { name: subjectId, in: query, schema: { type: string } }
+        - { name: level, in: query, schema: { $ref: '#/components/schemas/Level' } }
+        - { name: pageToken, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/LessonPlan' } }
+                  nextPageToken: { type: [string, 'null'] }
+
+  /v1/exports:
+    post:
+      operationId: createExport
+      tags: [content]
+      summary: Export approved content to Google Docs/Slides, DOCX or PDF
+      description: Requires `reviewStatus = APPROVED`. Google targets use the teacher's Workspace OAuth grant (drive.file scope only).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, id, format]
+              properties:
+                kind: { enum: [lesson_plan, worksheet] }
+                id: { type: string }
+                stream: { $ref: '#/components/schemas/Stream' }
+                format: { enum: [google_docs, google_slides, docx, pdf] }
+                includeAnswerKey: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Export ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string, format: uri }
+                  expiresAtEpochMs: { type: integer, format: int64 }
+        '409': { description: Content not approved }
+
+  /v1/resources/search:
+    post:
+      operationId: searchResources
+      tags: [resources]
+      summary: Search resources across adapters
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResourceQuery' }
+      responses:
+        '200':
+          description: Results with source and licence on every item
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Resource' } }
+                  nextPageToken: { type: [string, 'null'] }
+
+  /v1/sessions:
+    post:
+      operationId: createSession
+      tags: [sessions]
+      summary: Create a live session; returns join code and a one-time WebSocket ticket
+      x-rbac: [TEACHER, HOD]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [activityTitle]
+              properties:
+                activityTitle: { type: string, maxLength: 200 }
+                classId: { type: [string, 'null'] }
+                lessonPlanId: { type: [string, 'null'], description: Must be APPROVED }
+                maxParticipants: { type: integer, minimum: 1, maximum: 45, default: 45 }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessionId, joinCode, wsTicket, expiresAtEpochMs]
+                properties:
+                  sessionId: { type: string }
+                  joinCode: { type: string, pattern: '^[A-HJ-NP-Z2-9]{6}$' }
+                  wsTicket: { type: string, description: Single-use, 60 s TTL }
+                  expiresAtEpochMs: { type: integer, format: int64 }
+        '409': { description: Lesson plan not approved }
+
+  /v1/sessions/join:
+    post:
+      operationId: joinSession
+      tags: [sessions]
+      summary: Student joins with a code (no account). Returns a session-scoped participant token.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [joinCode, alias]
+              properties:
+                joinCode: { type: string }
+                alias: { type: string, maxLength: 24, description: Display alias chosen or assigned; real names discouraged }
+                rosterPseudonymId: { type: [string, 'null'], description: Optional when the class roster is linked }
+      responses:
+        '200':
+          description: Joined
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  participantId: { type: string }
+                  participantToken: { type: string }
+                  wsUrl: { type: string, format: uri }
+        '404': { description: Unknown or expired code }
+        '409': { description: Session full (45) }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /v1/sessions/{id}/report:
+    get:
+      operationId: getSessionReport
+      tags: [sessions]
+      summary: Post-session analytics (aggregated, no student identifiers in per-stream/outcome views)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/SessionReport' } } } }
+
+  /v1/classes/{classId}/announcements:
+    parameters:
+      - { name: classId, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: postAnnouncement
+      tags: [classes]
+      summary: Post or schedule a class-wide announcement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Announcement' }
+      responses:
+        '201': { description: Scheduled or sent }
+
+  /v1/me/data:
+    get:
+      operationId: exportMyData
+      tags: [privacy]
+      summary: Export all personal data held about the caller (PDPA access)
+      responses:
+        '200': { description: JSON archive, content: { application/json: { schema: { type: object } } } }
+    delete:
+      operationId: deleteMyData
+      tags: [privacy]
+      summary: Delete the caller's account data (subject to school retention obligations)
+      responses:
+        '202': { description: Deletion scheduled; completion within 30 days }
+
+  /v1/students/{pseudonymId}:
+    delete:
+      operationId: deleteStudentData
+      tags: [privacy]
+      summary: Delete a student's data across classes and sessions (DPO / school admin)
+      x-rbac: [SCHOOL_ADMIN]
+      parameters:
+        - { name: pseudonymId, in: path, required: true, schema: { type: string } }
+      responses:
+        '202': { description: Deletion scheduled }
+
+  /v1/schools/{schoolId}/settings:
+    parameters:
+      - { name: schoolId, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getSchoolSettings
+      tags: [privacy]
+      summary: Read the school's privacy and policy settings
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/SchoolPrivacySettings' } } } }
+    put:
+      operationId: putSchoolSettings
+      tags: [privacy]
+      summary: Update the school's privacy and policy settings (school admin)
+      x-rbac: [SCHOOL_ADMIN]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SchoolPrivacySettings' }
+      responses:
+        '204': { description: Saved and audit-logged }
+
+  /v1/audit:
+    get:
+      operationId: listAudit
+      tags: [privacy]
+      summary: Audit entries for the school (admin) or the caller
+      parameters:
+        - { name: since, in: query, schema: { type: integer, format: int64 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/AuditEntry' } }
+
+components:
+  securitySchemes:
+    oidc:
+      type: openIdConnect
+      openIdConnectUrl: https://auth.edumate.example.sg/.well-known/openid-configuration
+      description: OIDC (Authorization Code + PKCE) federated to Google Workspace for Education or the school IdP. Access tokens carry `sub`, `school_id`, `role`, `dept_ids`.
+
+  responses:
+    PiiDetected:
+      description: Request still contains identifiable data after client tokenisation
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    ContentBlocked:
+      description: Output failed moderation and was withheld
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    RateLimited:
+      description: Too many requests
+      headers: { Retry-After: { schema: { type: integer } } }
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { enum: [pii_detected, content_blocked, not_approved, rate_limited, invalid_request] }
+        message: { type: string }
+        requestId: { type: string }
+
+    Level: { enum: [P1, P2, P3, P4, P5, P6, SEC1, SEC2, SEC3, SEC4, SEC5, JC1, JC2, MI1, MI2, MI3] }
+    Stream: { enum: [PRI_FOUNDATION, PRI_STANDARD, PRI_STANDARD_EXT, G1, G2, G3, PREU_SUPPORT, PREU_CORE, PREU_EXTENSION] }
+    ScaffoldTier: { enum: [SUPPORT, CORE, EXTENSION] }
+    Tone: { enum: [WARM, NEUTRAL, FORMAL, PLAYFUL] }
+    Refinement: { enum: [MAKE_EASIER, ADD_EXTENSION, MORE_SG_CONTEXT, SHORTER, MORE_INTERACTIVE] }
+    ReviewStatus: { enum: [DRAFT_AI, TEACHER_EDITED, APPROVED, REJECTED] }
+    Competency21: { enum: [CRITICAL_ADAPTIVE_INVENTIVE, COMMUNICATION_COLLABORATION_INFO, CIVIC_GLOBAL_CROSSCULTURAL, SOCIAL_EMOTIONAL] }
+    BlockType: { enum: [EXPLAIN, POLL, SHORT_ANSWER, DRAWING, SORTING, MCQ, REFLECTION, GROUP_TASK, EXIT_TICKET] }
+    QuestionType: { enum: [MCQ, SHORT_ANSWER, STRUCTURED, FILL_IN_BLANK, OPEN_ENDED] }
+    Difficulty: { enum: [FOUNDATIONAL, INTERMEDIATE, ADVANCED] }
+
+    LearningOutcome:
+      type: object
+      required: [code, description]
+      properties: { code: { type: string }, description: { type: string } }
+
+    SyllabusTopic:
+      type: object
+      required: [id, code, title, subjectId, level, strand, outcomes]
+      properties:
+        id: { type: string }
+        code: { type: string }
+        title: { type: string }
+        subjectId: { type: string }
+        level: { $ref: '#/components/schemas/Level' }
+        strand: { type: string }
+        outcomes: { type: array, items: { $ref: '#/components/schemas/LearningOutcome' } }
+        seabSyllabusRef: { type: [string, 'null'] }
+        isPlaceholderCode: { type: boolean }
+
+    ResourceRef:
+      type: object
+      description: A resource the teacher explicitly selected. Only these may be cited.
+      required: [id, title, summary, source, licence]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        summary: { type: string }
+        source: { type: string }
+        licence: { type: string }
+
+    Citation:
+      type: object
+      required: [resourceId, title, source, licence]
+      properties: { resourceId: { type: string }, title: { type: string }, source: { type: string }, licence: { type: string } }
+
+    LessonBlock:
+      type: object
+      required: [id, type, title, instructions, durationMin]
+      properties:
+        id: { type: string }
+        type: { $ref: '#/components/schemas/BlockType' }
+        title: { type: string }
+        instructions: { type: string }
+        durationMin: { type: integer, minimum: 1 }
+        tier: { oneOf: [{ $ref: '#/components/schemas/ScaffoldTier' }, { type: 'null' }] }
+        options: { type: array, items: { type: string } }
+        isCheckForUnderstanding: { type: boolean }
+
+    DifferentiatedActivity:
+      type: object
+      required: [tier, description]
+      properties: { tier: { $ref: '#/components/schemas/ScaffoldTier' }, description: { type: string } }
+
+    LessonPlanRequest:
+      type: object
+      required: [requestId, level, subjectName, topic, streams, durationMin]
+      properties:
+        requestId: { type: string }
+        level: { $ref: '#/components/schemas/Level' }
+        subjectName: { type: string }
+        topic: { $ref: '#/components/schemas/SyllabusTopic' }
+        streams: { type: array, items: { $ref: '#/components/schemas/Stream' }, minItems: 1 }
+        durationMin: { type: integer, minimum: 15, maximum: 180 }
+        teacherNotes: { type: string, maxLength: 2000, description: Tokenised }
+        references: { type: array, items: { $ref: '#/components/schemas/ResourceRef' } }
+        tone: { $ref: '#/components/schemas/Tone' }
+        refinement: { oneOf: [{ $ref: '#/components/schemas/Refinement' }, { type: 'null' }] }
+        previous: { oneOf: [{ $ref: '#/components/schemas/LessonPlanDraft' }, { type: 'null' }] }
+
+    LessonPlanDraft:
+      type: object
+      required: [title, objectives, priorKnowledge, successCriteria, flow, differentiation, aflChecks, competencies, outcomesCited]
+      properties:
+        title: { type: string }
+        objectives: { type: array, items: { type: string } }
+        priorKnowledge: { type: array, items: { type: string } }
+        successCriteria: { type: array, items: { type: string } }
+        flow: { type: array, items: { $ref: '#/components/schemas/LessonBlock' } }
+        differentiation: { type: array, items: { $ref: '#/components/schemas/DifferentiatedActivity' } }
+        aflChecks: { type: array, items: { type: string } }
+        competencies: { type: array, items: { $ref: '#/components/schemas/Competency21' } }
+        outcomesCited: { type: array, items: { type: string }, description: Syllabus outcome codes addressed }
+        citations: { type: array, items: { $ref: '#/components/schemas/Citation' } }
+
+    LessonPlan:
+      allOf:
+        - $ref: '#/components/schemas/LessonPlanDraft'
+        - type: object
+          required: [id, level, subjectId, topicId, streams, durationMin, version, ownerId, reviewStatus, updatedAtEpochMs]
+          properties:
+            id: { type: string }
+            level: { $ref: '#/components/schemas/Level' }
+            subjectId: { type: string }
+            topicId: { type: string }
+            streams: { type: array, items: { $ref: '#/components/schemas/Stream' } }
+            durationMin: { type: integer }
+            tags: { type: array, items: { type: string } }
+            version: { type: integer }
+            parentPlanId: { type: [string, 'null'] }
+            ownerId: { type: string }
+            sharedWithDepartment: { type: boolean }
+            reviewStatus: { $ref: '#/components/schemas/ReviewStatus' }
+            updatedAtEpochMs: { type: integer, format: int64 }
+
+    DifficultyMix:
+      type: object
+      required: [foundational, intermediate, advanced]
+      description: Percentages totalling 100
+      properties: { foundational: { type: integer }, intermediate: { type: integer }, advanced: { type: integer } }
+
+    WorksheetSpec:
+      type: object
+      required: [topic, objectives, questionCount, questionTypes, streams]
+      properties:
+        topic: { $ref: '#/components/schemas/SyllabusTopic' }
+        objectives: { type: array, items: { type: string } }
+        questionCount: { type: integer, minimum: 1, maximum: 40 }
+        questionTypes: { type: array, items: { $ref: '#/components/schemas/QuestionType' }, minItems: 1, uniqueItems: true }
+        difficultyMix: { $ref: '#/components/schemas/DifficultyMix' }
+        streams: { type: array, items: { $ref: '#/components/schemas/Stream' }, minItems: 1 }
+        referenceResourceIds: { type: array, items: { type: string } }
+        teacherNotes: { type: string, description: Tokenised }
+
+    WorksheetRequest:
+      type: object
+      required: [requestId, spec, subjectName]
+      properties:
+        requestId: { type: string }
+        spec: { $ref: '#/components/schemas/WorksheetSpec' }
+        subjectName: { type: string }
+        references: { type: array, items: { $ref: '#/components/schemas/ResourceRef' } }
+        tone: { $ref: '#/components/schemas/Tone' }
+        refinement: { oneOf: [{ $ref: '#/components/schemas/Refinement' }, { type: 'null' }] }
+
+    Scaffold:
+      type: object
+      required: [kind, content]
+      properties:
+        kind: { enum: [SENTENCE_STARTER, WORKED_EXAMPLE, HINT, WORD_BANK, GRAPHIC_ORGANISER, CHALLENGE] }
+        content: { type: string }
+
+    WorksheetQuestion:
+      type: object
+      required: [id, number, type, difficulty, prompt, marks, outcomeCode]
+      properties:
+        id: { type: string }
+        number: { type: integer }
+        type: { $ref: '#/components/schemas/QuestionType' }
+        difficulty: { $ref: '#/components/schemas/Difficulty' }
+        prompt: { type: string }
+        options: { type: array, items: { type: string } }
+        scaffolds: { type: array, items: { $ref: '#/components/schemas/Scaffold' } }
+        marks: { type: integer }
+        outcomeCode: { type: string }
+        isChallenge: { type: boolean }
+
+    WorksheetVersion:
+      type: object
+      required: [stream, questions, answerKey]
+      properties:
+        stream: { $ref: '#/components/schemas/Stream' }
+        questions: { type: array, items: { $ref: '#/components/schemas/WorksheetQuestion' } }
+        answerKey:
+          type: array
+          items:
+            type: object
+            required: [questionId, answer, markingPoints]
+            properties:
+              questionId: { type: string }
+              answer: { type: string }
+              markingPoints: { type: array, items: { type: string } }
+
+    WorksheetDraft:
+      type: object
+      required: [title, versions, misconceptions, outcomesCited]
+      properties:
+        title: { type: string }
+        versions: { type: array, items: { $ref: '#/components/schemas/WorksheetVersion' } }
+        misconceptions:
+          type: array
+          items: { type: object, properties: { description: { type: string }, remedy: { type: string } } }
+        outcomesCited: { type: array, items: { type: string } }
+        citations: { type: array, items: { $ref: '#/components/schemas/Citation' } }
+
+    FeedbackRequest:
+      type: object
+      required: [requestId, questionPrompt, studentResponse, markingPoints, tier, level]
+      properties:
+        requestId: { type: string }
+        questionPrompt: { type: string }
+        studentResponse: { type: string, description: Tokenised; no names or identifiers }
+        markingPoints: { type: array, items: { type: string } }
+        tier: { $ref: '#/components/schemas/ScaffoldTier' }
+        level: { $ref: '#/components/schemas/Level' }
+
+    FeedbackDraft:
+      type: object
+      required: [feedback]
+      properties:
+        feedback: { type: string }
+        suggestedMarks: { type: [integer, 'null'] }
+        misconceptionTag: { type: [string, 'null'] }
+
+    ResourceQuery:
+      type: object
+      properties:
+        text: { type: string }
+        levels: { type: array, items: { $ref: '#/components/schemas/Level' } }
+        subjectIds: { type: array, items: { type: string } }
+        topicIds: { type: array, items: { type: string } }
+        types: { type: array, items: { enum: [SLIDES, WORKSHEET, VIDEO, INTERACTIVE, READING, ASSESSMENT, LESSON_PLAN] } }
+        streams: { type: array, items: { $ref: '#/components/schemas/Stream' } }
+        sources: { type: array, items: { enum: [MOE_LIBRARY, USER_UPLOAD, OPEN_LICENSED] } }
+        bookmarkedOnly: { type: boolean }
+
+    Resource:
+      type: object
+      required: [id, title, summary, sourceKind, sourceName, licence, attribution, level, subjectId, topicIds, type]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        summary: { type: string }
+        sourceKind: { enum: [MOE_LIBRARY, USER_UPLOAD, OPEN_LICENSED] }
+        sourceName: { type: string }
+        licence:
+          type: object
+          required: [name, allowsModification, requiresAttribution]
+          properties:
+            name: { type: string }
+            url: { type: [string, 'null'], format: uri }
+            allowsModification: { type: boolean }
+            requiresAttribution: { type: boolean }
+        attribution: { type: string }
+        level: { $ref: '#/components/schemas/Level' }
+        subjectId: { type: string }
+        topicIds: { type: array, items: { type: string } }
+        type: { type: string }
+        streams: { type: array, items: { $ref: '#/components/schemas/Stream' } }
+        url: { type: [string, 'null'], format: uri }
+        isMock: { type: boolean }
+
+    Announcement:
+      type: object
+      required: [audience, body]
+      properties:
+        audience: { enum: [STUDENTS, PARENTS] }
+        body: { type: string, maxLength: 2000 }
+        scheduledForEpochMs: { type: [integer, 'null'], format: int64 }
+
+    SessionReport:
+      type: object
+      properties:
+        masteryByOutcome: { type: object, additionalProperties: { type: number } }
+        masteryByStream: { type: object, additionalProperties: { type: number } }
+        misconceptionClusters:
+          type: array
+          items: { type: object, properties: { outcomeCode: { type: string }, answer: { type: string }, count: { type: integer } } }
+
+    SchoolPrivacySettings:
+      type: object
+      required: [schoolId, dpoName, dpoEmail]
+      properties:
+        schoolId: { type: string }
+        dpoName: { type: string }
+        dpoEmail: { type: string, format: email }
+        dpoPhone: { type: [string, 'null'] }
+        allowRealStudentNames: { type: boolean, default: false }
+        allowDirectStudentMessaging: { type: boolean, default: false }
+        allowLeaderboards: { type: boolean, default: true }
+        leaderboardsTeamOnly: { type: boolean, default: true }
+        aiFeaturesEnabled: { type: boolean, default: true }
+        requireAppLock: { type: boolean, default: true }
+        retention:
+          type: object
+          properties:
+            liveResponsesDays: { type: integer, default: 30 }
+            sessionAnalyticsDays: { type: integer, default: 365 }
+            auditLogDays: { type: integer, default: 730 }
+            rosterAfterClassEndDays: { type: integer, default: 180 }
+            aiDraftsUnreviewedDays: { type: integer, default: 90 }
+        privacyNoticeVersion: { type: integer }
+
+    AuditEntry:
+      type: object
+      required: [id, atEpochMs, actorRole, action, detail]
+      properties:
+        id: { type: string }
+        atEpochMs: { type: integer, format: int64 }
+        actorRole: { enum: [TEACHER, HOD, SCHOOL_ADMIN, STUDENT] }
+        action: { type: string }
+        detail: { type: string, description: Never contains prompt or student content }
+        piiTokensReplaced: { type: integer }
+        requestId: { type: [string, 'null'] }
+
+    LiveMessage:
+      description: |
+        WebSocket frames on `wss://live.edumate.example.sg/v1/sessions/{id}` (subprotocol `edumate.v1`).
+        Server → teacher: joined | status | response | help | left. Teacher → server: intervention | groups | end.
+        Interventions are delivered only to `targets`. Pastoral flags are computed on the teacher device and never sent to students.
+      oneOf:
+        - type: object
+          required: [type, studentId, atMs]
+          properties:
+            type: { enum: [joined, status, response, help, left] }
+            studentId: { type: string, description: Session-scoped participant id }
+            atMs: { type: integer, format: int64 }
+            alias: { type: string }
+            stream: { $ref: '#/components/schemas/Stream' }
+            status: { enum: [NOT_STARTED, WORKING, STUCK, DONE] }
+            blockId: { type: string }
+            text: { type: string }
+            confidence: { type: integer, minimum: 1, maximum: 5 }
+            correct: { type: [boolean, 'null'] }
+        - type: object
+          required: [type, id, title, content, targets]
+          properties:
+            type: { const: intervention }
+            id: { type: string }
+            title: { type: string }
+            content: { type: string }
+            targets: { type: array, items: { type: string }, minItems: 1 }
+        - type: object
+          required: [type, groups]
+          properties:
+            type: { const: groups }
+            groups:
+              type: array
+              items: { type: object, properties: { id: { type: string }, name: { type: string }, members: { type: array, items: { type: string } }, task: { type: [string, 'null'] } } }
