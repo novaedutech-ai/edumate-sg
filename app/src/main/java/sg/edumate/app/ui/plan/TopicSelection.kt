@@ -17,7 +17,7 @@ data class TopicSelection(
     val streamsForLevel: List<Stream> get() = level?.let { Stream.forBand(it.band) }.orEmpty()
 
     fun withLevel(l: Level, c: MockCurriculumRepository): TopicSelection {
-        val subjects = c.subjects(l.band)
+        val subjects = c.subjectsWithTopics(l)
         val subject = subjectId?.takeIf { id -> subjects.any { it.id == id } } ?: subjects.firstOrNull()?.id
         return copy(level = l, subjects = subjects).withSubject(subject, c)
     }
