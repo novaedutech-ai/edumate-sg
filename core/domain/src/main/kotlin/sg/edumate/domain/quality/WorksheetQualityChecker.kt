@@ -14,7 +14,9 @@ class WorksheetQualityChecker @Inject constructor() {
         val grade = readability.gradeLevel(text)
         val target = readability.targetMax(level, version.stream.tier)
         val keyed = version.answerKey.map { it.questionId }.toSet()
-        val missingKeys = version.questions.count { it.id !in keyed }
+        val realAnswers = version.answerKey.filter { it.answer.isNotBlank() && !it.answer.startsWith("Teacher to confirm") }
+            .map { it.questionId }.toSet()
+        val missingKeys = version.questions.count { it.id !in keyed || it.id !in realAnswers }
         val scaffolded = version.questions.count { it.scaffolds.isNotEmpty() }
 
         return buildList {
@@ -23,7 +25,7 @@ class WorksheetQualityChecker @Inject constructor() {
             add(QualityCheck("Reading level", grade == null || grade <= target,
                 if (grade == null) "Too little text to estimate" else "Estimated grade $grade (target ≤ $target for ${level.label} ${version.stream.label})"))
             add(QualityCheck("Answer key complete", missingKeys == 0,
-                if (missingKeys == 0) "Every question has a key" else "$missingKeys question(s) missing an answer"))
+                if (missingKeys == 0) "Every question has a key" else "$missingKeys question(s) still need a model answer"))
             if (version.stream.tier == ScaffoldTier.SUPPORT)
                 add(QualityCheck("Scaffolds present", scaffolded == version.questions.size, "$scaffolded/${version.questions.size} questions scaffolded"))
             if (version.stream.tier == ScaffoldTier.EXTENSION)

@@ -49,7 +49,9 @@ fun AiProvenanceCard(provenance: AiProvenance?, status: ReviewStatus, modifier: 
                 Icon(Icons.Outlined.Info, contentDescription = if (expanded) "Hide details" else "Show details")
             }
             if (provenance.isOfflineTemplate) {
-                Text("Offline template: structure only. Fill in specifics before use.", style = MaterialTheme.typography.bodySmall,
+                Text("Offline template, not AI: the AI service couldn't be reached or AI features are off. " +
+                    "Questions and answers are placeholders. Tap Regenerate once the AI backend is available.",
+                    style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 4.dp))
             }
             if (expanded) {

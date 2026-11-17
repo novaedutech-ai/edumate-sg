@@ -38,7 +38,14 @@ class LessonEditorViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            plans.observe(planId).collect { p -> if (!_state.value.dirty) _state.update { it.copy(plan = p) } }
+            var first = true
+            plans.observe(planId).collect { p ->
+                if (!_state.value.dirty) _state.update { it.copy(plan = p) }
+                if (first && p != null && p.provenance?.isOfflineTemplate == true && p.reviewStatus == ReviewStatus.DRAFT_AI) {
+                    _state.update { it.copy(message = "This is an offline template, not AI. Check the AI backend is running, then tap Regenerate.") }
+                }
+                if (p != null) first = false
+            }
         }
     }
 

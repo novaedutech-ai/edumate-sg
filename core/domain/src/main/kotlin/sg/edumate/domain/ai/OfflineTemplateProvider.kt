@@ -78,7 +78,7 @@ class OfflineTemplateProvider : LlmProvider {
             } + if (stream.tier == ScaffoldTier.EXTENSION) listOf(
                 WorksheetQuestion(
                     id = "challenge", number = spec.questionCount + 1, type = QuestionType.OPEN_ENDED, difficulty = Difficulty.ADVANCED,
-                    prompt = "Challenge: Design your own problem about ${spec.topic.title.lowercase()} set in ${SG_CONTEXTS[1]}. Solve it and explain why your method works.",
+                    prompt = "[Template - teacher to write] Challenge: a non-routine problem on ${spec.topic.title.lowercase()} that needs reasoning or justification.",
                     scaffolds = listOf(Scaffold(ScaffoldKind.CHALLENGE, "Consider what changes if one quantity is doubled.")),
                     marks = 4, outcomeCode = outcomes.last().code, isChallenge = true,
                 )
@@ -120,16 +120,20 @@ class OfflineTemplateProvider : LlmProvider {
         return blocks.map { it.copy(durationMin = maxOf(1, Math.round(it.durationMin * factor).toInt())) }
     }
 
+    /**
+     * Offline templates can't write real questions, so each one is an explicit placeholder telling the
+     * teacher what to write. It must never look like a finished question.
+     */
     private fun promptFor(type: QuestionType, d: Difficulty, o: LearningOutcome, topic: String, i: Int): String {
-        val ctx = SG_CONTEXTS[i % SG_CONTEXTS.size]
-        val verb = when (d) { Difficulty.FOUNDATIONAL -> "State"; Difficulty.INTERMEDIATE -> "Explain"; Difficulty.ADVANCED -> "Evaluate" }
-        return when (type) {
-            QuestionType.MCQ -> "Which of the following best shows: ${o.description.lowercase()}?"
-            QuestionType.FILL_IN_BLANK -> "Complete the statement about $topic: ________ ."
-            QuestionType.OPEN_ENDED -> "$verb how ${o.description.lowercase()} could be used at $ctx."
-            QuestionType.STRUCTURED -> "(a) $verb the key idea of ${o.description.lowercase()}. (b) Apply it to a situation at $ctx."
-            QuestionType.SHORT_ANSWER -> "$verb: ${o.description}."
+        val level = d.name.lowercase()
+        val kind = when (type) {
+            QuestionType.MCQ -> "an MCQ (4 options)"
+            QuestionType.FILL_IN_BLANK -> "a fill-in-the-blank item"
+            QuestionType.OPEN_ENDED -> "an open-ended question"
+            QuestionType.STRUCTURED -> "a structured question with parts (a) and (b)"
+            QuestionType.SHORT_ANSWER -> "a short-answer question"
         }
+        return "[Template - teacher to write] $kind, $level difficulty, on: ${o.description}."
     }
 
     private fun scaffoldsFor(tier: ScaffoldTier, type: QuestionType, topic: String): List<Scaffold> = when (tier) {

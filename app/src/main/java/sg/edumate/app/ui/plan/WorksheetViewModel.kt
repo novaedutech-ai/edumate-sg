@@ -80,7 +80,11 @@ class WorksheetViewModel @Inject constructor(
                 questionTypes = s.types, difficultyMix = DifficultyMix(s.foundational, s.intermediate, s.advanced), streams = s.streams.toList(),
             )
             when (val r = generate(spec, refinement)) {
-                is Outcome.Ok -> _state.update { it.copy(generating = false, worksheet = r.value, versionIndex = 0) }
+                is Outcome.Ok -> _state.update {
+                    it.copy(generating = false, worksheet = r.value, versionIndex = 0,
+                        message = if (r.value.provenance?.isOfflineTemplate == true)
+                            "Couldn't reach the AI service, so an offline template was used. Check the backend is running." else null)
+                }
                 is Outcome.Blocked -> _state.update { it.copy(generating = false, message = r.reason) }
                 is Outcome.Failed -> _state.update { it.copy(generating = false, message = r.message) }
             }
