@@ -13,7 +13,7 @@ java {
 
 kotlin { compilerOptions { jvmTarget.set(JvmTarget.JVM_17) } }
 
-application { mainClass.set("sg.edumate.backend.MainKt") }
+application { mainClass.set("sg.edumate.backend.ServerKt") }
 
 dependencies {
     implementation(project(":core:domain"))
